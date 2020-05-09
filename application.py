@@ -1,12 +1,11 @@
 import os
 
-from flask import Flask, session, render_template, request
+from flask import Flask, session, render_template, request, redirect, url_for
 from flask_session import Session
 from sqlalchemy import create_engine
 from sqlalchemy.orm import scoped_session, sessionmaker
 from argon2 import PasswordHasher
-
-from users import *
+from argon2.exceptions import VerifyMismatchError
 
 app = Flask(__name__)
 
@@ -22,6 +21,8 @@ Session(app)
 # Set up database
 engine = create_engine(os.getenv("DATABASE_URL"))
 db = scoped_session(sessionmaker(bind=engine))
+
+ph = PasswordHasher()
 
 
 @app.route("/")
@@ -54,7 +55,6 @@ def register():
     if password != password_confirmation:
         return render_template("register.html")
 
-    ph = PasswordHasher()
     hash = ph.hash(password)
 
     db.execute("INSERT INTO users (first_name, last_name, username, email, password) VALUES (:first_name, :last_name, "
@@ -64,6 +64,51 @@ def register():
     db.commit()
 
     return render_template("index.html")
+
+@app.route("/login")
+def get_login_form():
+    return render_template("login.html")
+
+
+@app.route("/login", methods=["POST"])
+def login():
+    email = request.form.get("userEmail")
+    password = request.form.get("userPassword")
+
+    user = db.execute('SELECT * FROM users WHERE email = :email', {"email": email}).fetchone()
+
+    if not user:
+        message = "Sorry, we don't recognise that email address, please try again"
+        return render_template("login.html", message=message)
+
+    try:
+        ph.verify(user['password'], password)
+    except VerifyMismatchError:
+        message = "Your password was incorrect, please try again."
+        return render_template("login.html", message=message)
+
+    session['loggedin'] = True
+    session['id'] = user['id']
+    session['username'] = user['username']
+
+    return redirect(url_for('home'))
+
+
+@app.route("/logout")
+def logout():
+    session.pop('loggedin', None)
+    session.pop('id', None)
+    session.pop('username', None)
+
+    return render_template("logout.html")
+
+@app.route("/home")
+def home():
+    print(session)
+    if 'loggedin' in session:
+        return render_template("home.html", username=session['username'])
+    return redirect(url_for('login'))
+
 
 
 if __name__ == "__main__":
